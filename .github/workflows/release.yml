@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: write
+  pages: write
 
 jobs:
   build:
@@ -68,3 +69,27 @@ jobs:
             patches/build/libs/*.jar
             patches/build/libs/*.rvp
           generate_release_notes: false
+
+      - name: Update patches.json index for ReVanced Manager
+        run: |
+          TAG="${{ steps.version.outputs.tag }}"
+          VERSION="${{ steps.version.outputs.version }}"
+          REPO="${{ github.repository }}"
+          RVP_NAME=$(ls patches/build/libs/*.rvp | head -1 | xargs basename)
+          TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%S")
+
+          cat > docs/patches.json << EOJSON
+          {
+            "version": "${TAG}",
+            "created_at": "${TIMESTAMP}",
+            "description": "Android Auto compatibility patch v${VERSION}",
+            "download_url": "https://github.com/${REPO}/releases/download/${TAG}/${RVP_NAME}",
+            "signature_download_url": null
+          }
+          EOJSON
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add docs/patches.json
+          git commit -m "Update patches.json for ${TAG}" || true
+          git push origin HEAD:main || git push origin HEAD:${GITHUB_REF_NAME} || true
