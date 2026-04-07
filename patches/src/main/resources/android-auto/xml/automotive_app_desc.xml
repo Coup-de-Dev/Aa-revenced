@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Android Auto app descriptor.
+    Declares the app as a media source for Android Auto.
+    See: https://developer.android.com/training/cars/media
+-->
+<automotiveApp>
+    <!-- Media playback support (audio/video) -->
+    <uses name="media" />
+    <!-- Notification access on car display -->
+    <uses name="notification" />
+</automotiveApp>
