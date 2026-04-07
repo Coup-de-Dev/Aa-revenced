@@ -3,8 +3,8 @@ package dev.coupde.patches
 import app.revanced.patcher.data.ResourceContext
 import app.revanced.patcher.patch.ResourcePatch
 import app.revanced.patcher.patch.annotation.Patch
-import app.revanced.patcher.util.ResourceGroup
 import org.w3c.dom.Element
+import java.io.File
 
 @Patch(
     name = "Android Auto compatibility",
@@ -16,12 +16,17 @@ import org.w3c.dom.Element
 @Suppress("unused")
 object AndroidAutoCompatibilityPatch : ResourcePatch() {
 
+    private const val AUTOMOTIVE_APP_DESC_XML = """<?xml version="1.0" encoding="utf-8"?>
+<automotiveApp>
+    <uses name="media" />
+    <uses name="notification" />
+</automotiveApp>"""
+
     override fun execute(context: ResourceContext) {
-        // Step 1: Copy automotive_app_desc.xml to res/xml/
-        context.copyResources(
-            "android-auto",
-            ResourceGroup("xml", "automotive_app_desc.xml"),
-        )
+        // Step 1: Create res/xml/automotive_app_desc.xml in the APK working directory
+        val xmlDir = context["res/xml"]
+        xmlDir.mkdirs()
+        File(xmlDir, "automotive_app_desc.xml").writeText(AUTOMOTIVE_APP_DESC_XML)
 
         // Step 2: Modify AndroidManifest.xml to add Android Auto support
         context.xmlEditor["AndroidManifest.xml"].use { editor ->
@@ -43,7 +48,7 @@ object AndroidAutoCompatibilityPatch : ResourcePatch() {
                 resource = "@xml/automotive_app_desc",
             )
 
-            // 2b. Add category.LAUNCHER intent-filter with CAR_DOCK for main activity
+            // 2b. Add CAR_DOCK and CAR_MODE categories to the launcher activity
             addCarLauncherCategory(document, application)
 
             // 2c. Add automotive uses-feature (required=false so it still installs on phones)
@@ -56,21 +61,9 @@ object AndroidAutoCompatibilityPatch : ResourcePatch() {
 
             // 2d. Add FOREGROUND_SERVICE permission (needed for media playback in Auto)
             addPermissionIfMissing(document, manifest, "android.permission.FOREGROUND_SERVICE")
-
-            // 2e. Ensure the app can handle media sessions for Android Auto
-            addMetadataIfMissing(
-                document,
-                application,
-                "com.google.android.gms.car.application.theme",
-                value = "@android:style/Theme.DeviceDefault.NoActionBar",
-            )
         }
     }
 
-    /**
-     * Adds a <meta-data> element to <application> if not already present.
-     * Supports both android:resource and android:value attributes.
-     */
     private fun addMetadataIfMissing(
         document: org.w3c.dom.Document,
         application: Element,
@@ -82,7 +75,6 @@ object AndroidAutoCompatibilityPatch : ResourcePatch() {
         for (i in 0 until metadataNodes.length) {
             val node = metadataNodes.item(i) as? Element ?: continue
             if (node.getAttribute("android:name") == name) {
-                // Already exists — update it
                 resource?.let { node.setAttribute("android:resource", it) }
                 value?.let { node.setAttribute("android:value", it) }
                 return
@@ -96,10 +88,6 @@ object AndroidAutoCompatibilityPatch : ResourcePatch() {
         application.appendChild(metaData)
     }
 
-    /**
-     * Finds the main launcher activity and adds android.hardware.usb.action.USB_DEVICE_ATTACHED
-     * and car dock categories so Android Auto can launch the app.
-     */
     private fun addCarLauncherCategory(document: org.w3c.dom.Document, application: Element) {
         val activities = application.getElementsByTagName("activity")
 
@@ -121,27 +109,14 @@ object AndroidAutoCompatibilityPatch : ResourcePatch() {
                 }
 
                 if (isLauncher) {
-                    // Add CAR_DOCK category to the launcher intent-filter
-                    addCategoryIfMissing(
-                        document,
-                        intentFilter,
-                        "android.intent.category.CAR_DOCK",
-                    )
-                    // Also add CAR_MODE category
-                    addCategoryIfMissing(
-                        document,
-                        intentFilter,
-                        "android.intent.category.CAR_MODE",
-                    )
-                    return // Only modify the first launcher activity
+                    addCategoryIfMissing(document, intentFilter, "android.intent.category.CAR_DOCK")
+                    addCategoryIfMissing(document, intentFilter, "android.intent.category.CAR_MODE")
+                    return
                 }
             }
         }
     }
 
-    /**
-     * Adds a <category> to an intent-filter if not already present.
-     */
     private fun addCategoryIfMissing(
         document: org.w3c.dom.Document,
         intentFilter: Element,
@@ -151,7 +126,7 @@ object AndroidAutoCompatibilityPatch : ResourcePatch() {
         for (i in 0 until categories.length) {
             val cat = categories.item(i) as? Element ?: continue
             if (cat.getAttribute("android:name") == categoryName) {
-                return // Already exists
+                return
             }
         }
 
@@ -160,9 +135,6 @@ object AndroidAutoCompatibilityPatch : ResourcePatch() {
         intentFilter.appendChild(category)
     }
 
-    /**
-     * Adds <uses-feature> to <manifest> if not already declared.
-     */
     private fun addUsesFeatureIfMissing(
         document: org.w3c.dom.Document,
         manifest: Element,
@@ -183,9 +155,6 @@ object AndroidAutoCompatibilityPatch : ResourcePatch() {
         manifest.appendChild(usesFeature)
     }
 
-    /**
-     * Adds <uses-permission> to <manifest> if not already declared.
-     */
     private fun addPermissionIfMissing(
         document: org.w3c.dom.Document,
         manifest: Element,

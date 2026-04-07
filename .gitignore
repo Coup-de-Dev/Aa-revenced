@@ -16,4 +16,5 @@ Thumbs.db
 *.apk
 *.jar
 !gradle/wrapper/*.jar
+!release/*.jar
 local.properties
