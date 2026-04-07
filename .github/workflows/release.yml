@@ -1,0 +1,70 @@
+name: Build and Release Patches
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build patches
+        run: ./gradlew :patches:jar
+
+      - name: Rename JAR to RVP
+        run: |
+          cd patches/build/libs
+          for f in *.jar; do
+            cp "$f" "${f%.jar}.rvp"
+          done
+
+      - name: Get version
+        id: version
+        run: |
+          VERSION=$(grep '^version' patches/build.gradle.kts | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          TAG="${GITHUB_REF_NAME:-v$VERSION}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: "Android Auto Patch v${{ steps.version.outputs.version }}"
+          body: |
+            ## Android Auto Compatibility Patch v${{ steps.version.outputs.version }}
+
+            Custom ReVanced patch that makes any APK compatible with Android Auto.
+
+            ### Installation
+            1. In **ReVanced Manager** → Settings → Patch bundles
+            2. Add from **URL** or download the `.rvp` file and add from **storage**
+            3. Select your APK, enable the patch, and install
+
+            ### What it does
+            - Injects `automotive_app_desc.xml` (media + notification)
+            - Adds car app metadata to AndroidManifest.xml
+            - Adds CAR_DOCK/CAR_MODE categories to launcher activity
+            - Adds automotive uses-feature (required=false)
+            - Adds FOREGROUND_SERVICE permission
+          files: |
+            patches/build/libs/*.jar
+            patches/build/libs/*.rvp
+          generate_release_notes: false

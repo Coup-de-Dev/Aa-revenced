@@ -17,4 +17,5 @@ Thumbs.db
 *.jar
 !gradle/wrapper/*.jar
 !release/*.jar
+!release/*.rvp
 local.properties
