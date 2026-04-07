@@ -7,19 +7,20 @@ import java.io.File
 @Suppress("unused")
 val androidAutoCompatibilityPatch = resourcePatch(
     name = "Android Auto compatibility",
-    description = "Makes any app compatible with Android Auto by injecting car app metadata, " +
-        "automotive app descriptor, and required manifest entries. " +
-        "Ideal for media apps like YouTube ReVanced, Spotify, etc.",
+    description = "Makes any app compatible with Android Auto (video in parked mode + media). " +
+        "Requires Android 16+ and Android Auto v16.3+.",
 ) {
     apply {
-        // Step 1: Create res/xml/automotive_app_desc.xml
+        // Step 1: Create res/xml/automotive_app_desc.xml with ALL capabilities
         val xmlDir = get("res/xml", copy = false)
         xmlDir.mkdirs()
         File(xmlDir, "automotive_app_desc.xml").writeText(
             """<?xml version="1.0" encoding="utf-8"?>
 <automotiveApp>
     <uses name="media" />
+    <uses name="video" />
     <uses name="notification" />
+    <uses name="template" />
 </automotiveApp>""",
         )
 
@@ -34,24 +35,118 @@ val androidAutoCompatibilityPatch = resourcePatch(
             }
 
             val application = applicationNodes.item(0) as Element
+            val packageName = manifest.getAttribute("package")
 
-            // Add car app metadata
+            // === KEY: Set appCategory="video" so Android Auto treats this as a video app ===
+            application.setAttribute("android:appCategory", "video")
+
+            // Add car app metadata pointing to our descriptor
             addMetadataIfMissing(
                 document, application,
                 "com.google.android.gms.car.application",
                 resource = "@xml/automotive_app_desc",
             )
 
-            // Add CAR_DOCK / CAR_MODE categories to launcher activity
-            addCarLauncherCategory(document, application)
+            // Add metadata to allow background audio while driving (for video apps)
+            addUsesFeatureIfMissing(
+                document, manifest,
+                "com.android.car.background_audio_while_driving",
+                required = false,
+            )
 
-            // Add automotive uses-feature (required=false)
-            addUsesFeatureIfMissing(document, manifest, "android.hardware.type.automotive", required = false)
-
-            // Add FOREGROUND_SERVICE permission
+            // Add FOREGROUND_SERVICE permissions
             addPermissionIfMissing(document, manifest, "android.permission.FOREGROUND_SERVICE")
+            addPermissionIfMissing(document, manifest, "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK")
+
+            // === Ensure a MediaBrowserService is declared ===
+            // Check if one already exists in the app
+            val existingMBS = findExistingMediaBrowserService(application)
+            if (existingMBS == null) {
+                // YouTube 20.x+ has an internal media service, try to declare one
+                // pointing to known YouTube service classes
+                addMediaBrowserServiceDeclaration(document, application, packageName)
+            }
+
+            // Add CAR_DOCK/CAR_MODE categories to launcher (legacy but doesn't hurt)
+            addCarLauncherCategory(document, application)
         }
     }
+}
+
+/**
+ * Finds an existing MediaBrowserService declaration in the manifest.
+ */
+private fun findExistingMediaBrowserService(application: Element): Element? {
+    val services = application.getElementsByTagName("service")
+    for (i in 0 until services.length) {
+        val service = services.item(i) as? Element ?: continue
+        val intentFilters = service.getElementsByTagName("intent-filter")
+        for (j in 0 until intentFilters.length) {
+            val actions = (intentFilters.item(j) as? Element)?.getElementsByTagName("action") ?: continue
+            for (k in 0 until actions.length) {
+                val actionName = (actions.item(k) as? Element)?.getAttribute("android:name")
+                if (actionName == "android.media.browse.MediaBrowserService") {
+                    return service
+                }
+            }
+        }
+    }
+    return null
+}
+
+/**
+ * Adds a MediaBrowserService intent-filter to an existing service or creates one.
+ * For YouTube, we look for known media-related service classes.
+ */
+private fun addMediaBrowserServiceDeclaration(
+    document: org.w3c.dom.Document,
+    application: Element,
+    packageName: String,
+) {
+    // Look for existing YouTube media-related services to add the intent-filter to
+    val knownYouTubeServices = listOf(
+        "com.google.android.apps.youtube.app.common.mediabrowser.YouTubeMediaBrowserService",
+        "com.google.android.youtube.api.service.YouTubeMediaBrowserService",
+        "com.google.android.apps.youtube.music.mediabrowser.MusicBrowserService",
+    )
+
+    val services = application.getElementsByTagName("service")
+    for (i in 0 until services.length) {
+        val service = services.item(i) as? Element ?: continue
+        val serviceName = service.getAttribute("android:name")
+
+        // Check if this is a known media service or contains "MediaBrowser" or "mediabrowser"
+        if (knownYouTubeServices.any { serviceName == it } ||
+            serviceName.contains("MediaBrowser", ignoreCase = true) ||
+            serviceName.contains("mediabrowser", ignoreCase = true)
+        ) {
+            // Add the MediaBrowserService intent-filter to this existing service
+            val intentFilter = document.createElement("intent-filter")
+            val action = document.createElement("action")
+            action.setAttribute("android:name", "android.media.browse.MediaBrowserService")
+            intentFilter.appendChild(action)
+            service.appendChild(intentFilter)
+            service.setAttribute("android:exported", "true")
+            return
+        }
+    }
+
+    // If no existing media service found, create a new service declaration
+    // pointing to the most common YouTube media browser service class name
+    val service = document.createElement("service")
+    service.setAttribute(
+        "android:name",
+        "com.google.android.apps.youtube.app.common.mediabrowser.YouTubeMediaBrowserService",
+    )
+    service.setAttribute("android:exported", "true")
+
+    val intentFilter = document.createElement("intent-filter")
+    val action = document.createElement("action")
+    action.setAttribute("android:name", "android.media.browse.MediaBrowserService")
+    intentFilter.appendChild(action)
+    service.appendChild(intentFilter)
+
+    application.appendChild(service)
 }
 
 private fun addMetadataIfMissing(
